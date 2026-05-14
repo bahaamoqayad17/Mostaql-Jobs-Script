@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "once": "node index.js --once",
-    "dry-run": "node index.js --once --dry-run --notify-initial"
+    "dry-run": "node index.js --once --dry-run --notify-initial",
+    "test-mobile": "node index.js --test-mobile"
   },
   "keywords": [
     "mostaql",

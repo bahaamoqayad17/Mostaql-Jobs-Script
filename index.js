@@ -10,9 +10,13 @@ const config = {
   url: process.env.MOSTAQL_URL || DEFAULT_URL,
   intervalSeconds: Math.max(30, Number(process.env.MOSTAQL_INTERVAL_SECONDS || 60)),
   stateFile: path.resolve(process.cwd(), process.env.MOSTAQL_STATE_FILE || 'seen-jobs.json'),
+  ntfyTopic: process.env.NTFY_TOPIC || '',
+  ntfyServer: (process.env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/+$/, ''),
+  ntfyPriority: Math.min(5, Math.max(1, Number(process.env.NTFY_PRIORITY || 4) || 4)),
   notifyInitial: args.has('--notify-initial') || process.env.MOSTAQL_NOTIFY_INITIAL === 'true',
   once: args.has('--once'),
   dryRun: args.has('--dry-run'),
+  testMobile: args.has('--test-mobile'),
 };
 
 async function readState() {
@@ -123,21 +127,17 @@ function logJob(prefix, job) {
   }
 }
 
-async function notifyJob(job) {
-  logJob('[new]', job);
-
-  if (config.dryRun) {
-    return;
-  }
-
+function notificationMessage(job, limit = 250) {
   const messageParts = [job.postedText, job.bids, job.brief].filter(Boolean);
-  const message = messageParts.join(' | ').slice(0, 250);
+  return messageParts.join(' | ').slice(0, limit);
+}
 
+async function notifyDesktop(job) {
   await new Promise((resolve) => {
     notifier.notify(
       {
         title: `Mostaql: ${job.title}`.slice(0, 120),
-        message: message || job.url,
+        message: notificationMessage(job) || job.url,
         open: job.url,
         sound: true,
         wait: false,
@@ -151,6 +151,55 @@ async function notifyJob(job) {
       },
     );
   });
+}
+
+async function notifyMobile(job) {
+  if (!config.ntfyTopic) {
+    return;
+  }
+
+  const response = await fetch(config.ntfyServer, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      topic: config.ntfyTopic,
+      title: `Mostaql: ${job.title}`.slice(0, 120),
+      message: notificationMessage(job, 900) || job.url,
+      priority: config.ntfyPriority,
+      tags: ['briefcase'],
+      click: job.url,
+      actions: [
+        {
+          action: 'view',
+          label: 'Open job',
+          url: job.url,
+          clear: true,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`ntfy returned HTTP ${response.status}`);
+  }
+}
+
+async function notifyJob(job) {
+  logJob('[new]', job);
+
+  if (config.dryRun) {
+    return;
+  }
+
+  const results = await Promise.allSettled([notifyDesktop(job), notifyMobile(job)]);
+
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.warn(`[warn] Notification failed: ${result.reason.message}`);
+    }
+  }
 }
 
 async function checkOnce() {
@@ -191,9 +240,26 @@ async function main() {
   console.log('Mostaql job notifier');
   console.log(`URL: ${config.url}`);
   console.log(`State: ${config.stateFile}`);
+  console.log(`Mobile: ${config.ntfyTopic ? `${config.ntfyServer}/${config.ntfyTopic}` : 'disabled'}`);
 
   if (config.dryRun) {
-    console.log('Mode: dry run, desktop notifications are disabled.');
+    console.log('Mode: dry run, notifications are disabled.');
+  }
+
+  if (config.testMobile) {
+    if (!config.ntfyTopic) {
+      throw new Error('Set NTFY_TOPIC before running --test-mobile.');
+    }
+
+    await notifyMobile({
+      title: 'Test mobile notification',
+      url: config.url,
+      postedText: 'Mobile notification test',
+      bids: '',
+      brief: 'Your Mostaql job notifier can reach your phone.',
+    });
+    console.log('[ok] Sent a test mobile notification.');
+    return;
   }
 
   if (config.once) {
