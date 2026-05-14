@@ -1,0 +1,21 @@
+{
+  "name": "mostaql-job-notifier",
+  "version": "1.0.0",
+  "description": "Desktop notifications for new Mostaql jobs from a filtered projects page.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "once": "node index.js --once",
+    "dry-run": "node index.js --once --dry-run --notify-initial"
+  },
+  "keywords": [
+    "mostaql",
+    "notifications",
+    "jobs"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "node-notifier": "^10.0.1"
+  }
+}
