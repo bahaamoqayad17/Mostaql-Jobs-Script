@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const cheerio = require('cheerio');
 const notifier = require('node-notifier');
+require('dotenv').config({ quiet: true });
 
 const DEFAULT_URL = 'https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest';
 const args = new Set(process.argv.slice(2));

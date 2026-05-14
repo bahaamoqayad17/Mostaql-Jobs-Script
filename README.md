@@ -14,6 +14,12 @@ It checks for newly posted jobs, remembers projects it has already seen in `seen
 npm install
 ```
 
+Edit `.env` to configure the watcher. The main setting for mobile notifications is:
+
+```text
+NTFY_TOPIC=mostaql-jobs-yourname-9f4c2a81
+```
+
 ## Run
 
 ```bash
@@ -48,17 +54,21 @@ mostaql-jobs-yourname-9f4c2a81
 ```
 
 3. Subscribe to that same topic in the ntfy mobile app.
-4. In PowerShell, set the topic and send a test:
+4. Put the topic in `.env`:
+
+```text
+NTFY_TOPIC=mostaql-jobs-yourname-9f4c2a81
+```
+
+5. Send a test:
 
 ```powershell
-$env:NTFY_TOPIC = "mostaql-jobs-yourname-9f4c2a81"
 npm run test-mobile
 ```
 
-5. If the test arrives on your phone, start the watcher:
+6. If the test arrives on your phone, start the watcher:
 
 ```powershell
-$env:NTFY_TOPIC = "mostaql-jobs-yourname-9f4c2a81"
 npm start
 ```
 
@@ -66,7 +76,19 @@ When a new Mostaql job is found, your phone notification will include a tap-to-o
 
 ## Options
 
-You can change settings with environment variables:
+You can change settings in `.env`:
+
+```text
+MOSTAQL_INTERVAL_SECONDS=120
+MOSTAQL_NOTIFY_INITIAL=true
+MOSTAQL_URL=https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest
+MOSTAQL_STATE_FILE=seen-jobs.json
+NTFY_TOPIC=mostaql-jobs-yourname-9f4c2a81
+NTFY_SERVER=https://ntfy.sh
+NTFY_PRIORITY=4
+```
+
+You can also override any setting with environment variables:
 
 ```bash
 MOSTAQL_INTERVAL_SECONDS=120 npm start
@@ -82,7 +104,6 @@ On Windows PowerShell:
 
 ```powershell
 $env:MOSTAQL_INTERVAL_SECONDS = "120"
-$env:NTFY_TOPIC = "mostaql-jobs-yourname-9f4c2a81"
 npm start
 ```
 
