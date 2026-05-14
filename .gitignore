@@ -1,5 +1,3 @@
 node_modules/
 npm-debug.log*
-.env
-seen-jobs.json
 seen-jobs.json.tmp
