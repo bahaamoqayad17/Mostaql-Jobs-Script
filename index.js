@@ -4,45 +4,80 @@ const cheerio = require('cheerio');
 const notifier = require('node-notifier');
 require('dotenv').config({ quiet: true });
 
-const DEFAULT_URL = 'https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest';
+const DEFAULT_MOSTAQL_URL = 'https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest';
+const DEFAULT_BAAEED_URL = 'https://baaeed.com/remote-jobs?sort=latest';
 const args = new Set(process.argv.slice(2));
 
 const config = {
-  url: process.env.MOSTAQL_URL || DEFAULT_URL,
+  mostaqlUrl: process.env.MOSTAQL_URL || DEFAULT_MOSTAQL_URL,
+  baaeedUrl: process.env.BAAEED_URL || DEFAULT_BAAEED_URL,
   intervalSeconds: Math.max(30, Number(process.env.MOSTAQL_INTERVAL_SECONDS || 60)),
   stateFile: path.resolve(process.cwd(), process.env.MOSTAQL_STATE_FILE || 'seen-jobs.json'),
   ntfyTopic: process.env.NTFY_TOPIC || '',
   ntfyServer: (process.env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/+$/, ''),
   ntfyPriority: Math.min(5, Math.max(1, Number(process.env.NTFY_PRIORITY || 4) || 4)),
+  desktopNotifications: process.env.MOSTAQL_DESKTOP_NOTIFICATIONS === 'true',
   notifyInitial: args.has('--notify-initial') || process.env.MOSTAQL_NOTIFY_INITIAL === 'true',
   once: args.has('--once'),
   dryRun: args.has('--dry-run'),
   testMobile: args.has('--test-mobile'),
 };
 
+const DEFAULT_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml',
+  'Accept-Language': 'ar,en;q=0.8',
+  'Cache-Control': 'no-cache',
+};
+
+const sources = [
+  {
+    id: 'mostaql',
+    name: 'Mostaql',
+    url: config.mostaqlUrl,
+    parseJobs: parseMostaqlJobs,
+    emptyMessage: 'No Mostaql project rows were found. The page layout may have changed.',
+    legacyIds: true,
+  },
+  {
+    id: 'baaeed',
+    name: 'Baaeed',
+    url: config.baaeedUrl,
+    parseJobs: parseBaaeedJobs,
+    emptyMessage: 'No Baaeed job cards were found. The page layout may have changed.',
+  },
+];
+
 async function readState() {
   try {
     const raw = await fs.readFile(config.stateFile, 'utf8');
     const state = JSON.parse(raw);
+    const seenIds = Array.isArray(state.seenIds) ? state.seenIds : [];
+    const initializedSources = Array.isArray(state.initializedSources)
+      ? state.initializedSources
+      : ['mostaql'];
 
     return {
       existed: true,
-      seenIds: Array.isArray(state.seenIds) ? state.seenIds : [],
+      seenIds,
+      initializedSources,
       lastCheckedAt: state.lastCheckedAt || null,
     };
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return { existed: false, seenIds: [], lastCheckedAt: null };
+      return { existed: false, seenIds: [], initializedSources: [], lastCheckedAt: null };
     }
 
     throw error;
   }
 }
 
-async function writeState(seenIds) {
+async function writeState(seenIds, initializedSources) {
   const state = {
     lastCheckedAt: new Date().toISOString(),
-    seenIds: seenIds.slice(0, 200),
+    initializedSources: [...initializedSources].sort(),
+    seenIds: seenIds.slice(0, 500),
   };
 
   const tmpFile = `${config.stateFile}.tmp`;
@@ -50,23 +85,18 @@ async function writeState(seenIds) {
   await fs.rename(tmpFile, config.stateFile);
 }
 
-async function fetchProjectsPage() {
+async function fetchJobsPage(source) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
 
   try {
-    const response = await fetch(config.url, {
+    const response = await fetch(source.url, {
       signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; MostaqlJobNotifier/1.0; +https://mostaql.com)',
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'ar,en;q=0.8',
-        'Cache-Control': 'no-cache',
-      },
+      headers: DEFAULT_HEADERS,
     });
 
     if (!response.ok) {
-      throw new Error(`Mostaql returned HTTP ${response.status}`);
+      throw new Error(`${source.name} returned HTTP ${response.status}`);
     }
 
     return await response.text();
@@ -76,7 +106,7 @@ async function fetchProjectsPage() {
 }
 
 function normalizeText(text) {
-  return text.replace(/\s+/g, ' ').trim();
+  return (text || '').replace(/\s+/g, ' ').trim();
 }
 
 function projectIdFromUrl(url) {
@@ -84,7 +114,20 @@ function projectIdFromUrl(url) {
   return match ? match[1] : url;
 }
 
-function parseJobs(html) {
+function baaeedJobIdFromUrl(url) {
+  try {
+    const parsedUrl = new URL(url, 'https://baaeed.com');
+    return parsedUrl.pathname.replace(/\/+$/, '');
+  } catch {
+    return url;
+  }
+}
+
+function scopedJobId(sourceId, jobId) {
+  return `${sourceId}:${jobId}`;
+}
+
+function parseMostaqlJobs(html) {
   const $ = cheerio.load(html);
 
   return $('tr.project-row')
@@ -118,9 +161,48 @@ function parseJobs(html) {
     .filter(Boolean);
 }
 
+function parseBaaeedJobs(html) {
+  const $ = cheerio.load(html);
+
+  return $('section.baaeed-card')
+    .map((_, card) => {
+      const $card = $(card);
+      const $titleLink = $card.find('h3.card-title a[href*="/remote-jobs/"]').first();
+      const url = $titleLink.attr('href');
+      const title = normalizeText($titleLink.text());
+
+      if (!url || !title) {
+        return null;
+      }
+
+      const metaItems = $card
+        .find('.baaeed-list__meta-items li')
+        .map((_, item) => normalizeText($(item).text()))
+        .get();
+      const $time = $card.find('time').first();
+
+      return {
+        id: baaeedJobIdFromUrl(url),
+        title,
+        url,
+        company: metaItems[0] || '',
+        category: metaItems[1] || '',
+        postedAt: $time.attr('datetime') || '',
+        postedText: normalizeText($time.text()),
+        brief: normalizeText($card.find('.card-brief a.details-url').first().text()),
+      };
+    })
+    .get()
+    .filter(Boolean);
+}
+
+function jobDetails(job) {
+  return [job.postedText, job.bids, job.company, job.category].filter(Boolean);
+}
+
 function logJob(prefix, job) {
-  const extra = [job.postedText, job.bids].filter(Boolean).join(' | ');
-  console.log(`${prefix} ${job.title}`);
+  const extra = jobDetails(job).join(' | ');
+  console.log(`${prefix} ${job.sourceName}: ${job.title}`);
   console.log(`   ${job.url}`);
 
   if (extra) {
@@ -129,7 +211,7 @@ function logJob(prefix, job) {
 }
 
 function notificationMessage(job, limit = 250) {
-  const messageParts = [job.postedText, job.bids, job.brief].filter(Boolean);
+  const messageParts = [...jobDetails(job), job.brief].filter(Boolean);
   return messageParts.join(' | ').slice(0, limit);
 }
 
@@ -137,7 +219,7 @@ async function notifyDesktop(job) {
   await new Promise((resolve) => {
     notifier.notify(
       {
-        title: `Mostaql: ${job.title}`.slice(0, 120),
+        title: `${job.sourceName}: ${job.title}`.slice(0, 120),
         message: notificationMessage(job) || job.url,
         open: job.url,
         sound: true,
@@ -166,10 +248,10 @@ async function notifyMobile(job) {
     },
     body: JSON.stringify({
       topic: config.ntfyTopic,
-      title: `Mostaql: ${job.title}`.slice(0, 120),
+      title: `${job.sourceName}: ${job.title}`.slice(0, 120),
       message: notificationMessage(job, 900) || job.url,
       priority: config.ntfyPriority,
-      tags: ['briefcase'],
+      tags: ['briefcase', job.sourceId],
       click: job.url,
       actions: [
         {
@@ -185,6 +267,8 @@ async function notifyMobile(job) {
   if (!response.ok) {
     throw new Error(`ntfy returned HTTP ${response.status}`);
   }
+
+  console.log('[mobile] Sent ntfy notification.');
 }
 
 async function notifyJob(job) {
@@ -194,7 +278,13 @@ async function notifyJob(job) {
     return;
   }
 
-  const results = await Promise.allSettled([notifyDesktop(job), notifyMobile(job)]);
+  const notifications = [notifyMobile(job)];
+
+  if (config.desktopNotifications) {
+    notifications.push(notifyDesktop(job));
+  }
+
+  const results = await Promise.allSettled(notifications);
 
   for (const result of results) {
     if (result.status === 'rejected') {
@@ -206,26 +296,55 @@ async function notifyJob(job) {
 async function checkOnce() {
   const state = await readState();
   const knownIds = new Set(state.seenIds);
-  const html = await fetchProjectsPage();
-  const jobs = parseJobs(html);
+  const initializedSources = new Set(state.initializedSources);
+  const checkedSourceIds = [];
+  const currentSeenIds = [];
+  const errors = [];
 
-  if (jobs.length === 0) {
-    throw new Error('No project rows were found. The page layout may have changed.');
+  for (const source of sources) {
+    try {
+      const html = await fetchJobsPage(source);
+      const jobs = source.parseJobs(html).map((job) => ({
+        ...job,
+        rawId: job.id,
+        id: scopedJobId(source.id, job.id),
+        sourceId: source.id,
+        sourceName: source.name,
+      }));
+
+      if (jobs.length === 0) {
+        throw new Error(source.emptyMessage);
+      }
+
+      const newJobs = jobs.filter((job) => {
+        const knownScopedId = knownIds.has(job.id);
+        const knownLegacyId = source.legacyIds && knownIds.has(job.rawId);
+        return !knownScopedId && !knownLegacyId;
+      });
+      const shouldNotify = initializedSources.has(source.id) || config.notifyInitial;
+
+      if (newJobs.length === 0) {
+        console.log(`[ok] ${source.name}: No new jobs. Checked ${jobs.length} visible jobs at ${new Date().toLocaleString()}.`);
+      } else if (!shouldNotify) {
+        console.log(`[first run] ${source.name}: Saved ${jobs.length} current jobs. Future checks will notify only new jobs.`);
+      } else {
+        console.log(`[ok] ${source.name}: Found ${newJobs.length} new job(s).`);
+
+        for (const job of [...newJobs].reverse()) {
+          await notifyJob(job);
+        }
+      }
+
+      checkedSourceIds.push(source.id);
+      currentSeenIds.push(...jobs.map((job) => job.id));
+    } catch (error) {
+      console.error(`[error] ${source.name}: ${error.message}`);
+      errors.push(error);
+    }
   }
 
-  const newJobs = jobs.filter((job) => !knownIds.has(job.id));
-  const shouldNotify = state.existed || config.notifyInitial;
-
-  if (newJobs.length === 0) {
-    console.log(`[ok] No new jobs. Checked ${jobs.length} visible projects at ${new Date().toLocaleString()}.`);
-  } else if (!shouldNotify) {
-    console.log(`[first run] Saved ${jobs.length} current jobs. Future checks will notify only new jobs.`);
-  } else {
-    console.log(`[ok] Found ${newJobs.length} new job(s).`);
-
-    for (const job of [...newJobs].reverse()) {
-      await notifyJob(job);
-    }
+  if (checkedSourceIds.length === 0) {
+    throw new Error(errors.map((error) => error.message).join(' | '));
   }
 
   if (config.dryRun) {
@@ -233,15 +352,23 @@ async function checkOnce() {
     return;
   }
 
-  const updatedSeenIds = [...new Set([...jobs.map((job) => job.id), ...state.seenIds])];
-  await writeState(updatedSeenIds);
+  for (const sourceId of checkedSourceIds) {
+    initializedSources.add(sourceId);
+  }
+
+  const updatedSeenIds = [...new Set([...currentSeenIds, ...state.seenIds])];
+  await writeState(updatedSeenIds, initializedSources);
 }
 
 async function main() {
-  console.log('Mostaql job notifier');
-  console.log(`URL: ${config.url}`);
+  console.log('Job notifier');
+  console.log('Sources:');
+  for (const source of sources) {
+    console.log(`  ${source.name}: ${source.url}`);
+  }
   console.log(`State: ${config.stateFile}`);
   console.log(`Mobile: ${config.ntfyTopic ? `${config.ntfyServer}/${config.ntfyTopic}` : 'disabled'}`);
+  console.log(`Desktop: ${config.desktopNotifications ? 'enabled' : 'disabled'}`);
 
   if (config.dryRun) {
     console.log('Mode: dry run, notifications are disabled.');
@@ -253,11 +380,13 @@ async function main() {
     }
 
     await notifyMobile({
+      sourceId: 'test',
+      sourceName: 'Job notifier',
       title: 'Test mobile notification',
-      url: config.url,
+      url: config.mostaqlUrl,
       postedText: 'Mobile notification test',
       bids: '',
-      brief: 'Your Mostaql job notifier can reach your phone.',
+      brief: 'Your Mostaql and Baaeed job notifier can reach your phone.',
     });
     console.log('[ok] Sent a test mobile notification.');
     return;

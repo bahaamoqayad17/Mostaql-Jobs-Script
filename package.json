@@ -1,7 +1,7 @@
 {
   "name": "mostaql-job-notifier",
   "version": "1.0.0",
-  "description": "Desktop notifications for new Mostaql jobs from a filtered projects page.",
+  "description": "Desktop and mobile notifications for new Mostaql and Baaeed jobs.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -11,6 +11,7 @@
   },
   "keywords": [
     "mostaql",
+    "baaeed",
     "notifications",
     "jobs"
   ],

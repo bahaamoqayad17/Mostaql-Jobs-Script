@@ -1,12 +1,13 @@
-# Mostaql Job Notifier
+# Job Notifier
 
-A small Node.js script that watches this filtered Mostaql projects page:
+A small Node.js script that watches a filtered Mostaql projects page and the latest Baaeed remote jobs page:
 
 ```text
 https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest
+https://baaeed.com/remote-jobs?sort=latest
 ```
 
-It checks for newly posted jobs, remembers projects it has already seen in `seen-jobs.json`, and sends a desktop notification for each new project. It can also send mobile push notifications through ntfy.
+It checks for newly posted jobs, remembers jobs it has already seen in `seen-jobs.json`, and sends mobile push notifications through ntfy. Desktop notifications can be enabled when running on a machine with a desktop session.
 
 ## Setup
 
@@ -26,7 +27,7 @@ NTFY_TOPIC=mostaql-jobs-yourname-9f4c2a81
 npm start
 ```
 
-On the first run, the script saves the currently visible jobs without notifying you. After that, it notifies only for jobs that appear later.
+On the first run for each source, the script saves the currently visible jobs without notifying you. After that, it notifies only for jobs that appear later.
 
 To test the parser and print current jobs without sending desktop notifications or changing `seen-jobs.json`:
 
@@ -72,7 +73,7 @@ npm run test-mobile
 npm start
 ```
 
-When a new Mostaql job is found, your phone notification will include a tap-to-open link for the project.
+When a new Mostaql or Baaeed job is found, your phone notification will include a tap-to-open link for the job.
 
 ## Options
 
@@ -82,7 +83,9 @@ You can change settings in `.env`:
 MOSTAQL_INTERVAL_SECONDS=120
 MOSTAQL_NOTIFY_INITIAL=true
 MOSTAQL_URL=https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest
+BAAEED_URL=https://baaeed.com/remote-jobs?sort=latest
 MOSTAQL_STATE_FILE=seen-jobs.json
+MOSTAQL_DESKTOP_NOTIFICATIONS=false
 NTFY_TOPIC=mostaql-jobs-yourname-9f4c2a81
 NTFY_SERVER=https://ntfy.sh
 NTFY_PRIORITY=4
@@ -94,7 +97,9 @@ You can also override any setting with environment variables:
 MOSTAQL_INTERVAL_SECONDS=120 npm start
 MOSTAQL_NOTIFY_INITIAL=true npm start
 MOSTAQL_URL="https://mostaql.com/projects?category=development,ai-machine-learning&sort=latest" npm start
+BAAEED_URL="https://baaeed.com/remote-jobs?sort=latest" npm start
 MOSTAQL_STATE_FILE="./seen-jobs.json" npm start
+MOSTAQL_DESKTOP_NOTIFICATIONS=true npm start
 NTFY_TOPIC="mostaql-jobs-yourname-9f4c2a81" npm start
 NTFY_SERVER="https://ntfy.sh" npm start
 NTFY_PRIORITY=4 npm start
